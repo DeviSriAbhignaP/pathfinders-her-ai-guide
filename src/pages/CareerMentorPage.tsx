@@ -1,7 +1,8 @@
 import { useState, useRef, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { ArrowLeft, Send, Bot, User, ChevronDown, ChevronUp, Sparkles, Loader2 } from "lucide-react";
+import { ArrowLeft, Send, Bot, User, Sparkles, Loader2 } from "lucide-react";
 import GlassCard from "@/components/GlassCard";
+import ReactMarkdown from "react-markdown";
 
 interface CareerMentorPageProps {
   onBack: () => void;
@@ -13,11 +14,7 @@ interface Message {
   content: string;
 }
 
-interface CareerPath {
-  title: string;
-  summary: string;
-  details: string;
-}
+const CHAT_URL = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/career-mentor`;
 
 const suggestedQuestions = [
   "What career paths suit a Python developer?",
@@ -27,198 +24,99 @@ const suggestedQuestions = [
   "What are the top trending tech roles in 2025?",
 ];
 
-// Local AI simulation for career guidance
-function generateMentorResponse(query: string, userName: string): string {
-  const q = query.toLowerCase();
+async function streamChat({
+  messages,
+  onDelta,
+  onDone,
+  onError,
+}: {
+  messages: Message[];
+  onDelta: (text: string) => void;
+  onDone: () => void;
+  onError: (err: string) => void;
+}) {
+  const resp = await fetch(CHAT_URL, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY}`,
+    },
+    body: JSON.stringify({ messages }),
+  });
 
-  if (q.includes('career path') || q.includes('career') || q.includes('suit') || q.includes('option')) {
-    return `Great question, ${userName}! 🌟 Based on common career trajectories, here are some paths to explore:
-
-**1. Software Development Engineer**
-A versatile role focusing on building scalable applications. Start with strong fundamentals in data structures and one primary language.
-
-**2. Data Science & Analytics**
-Perfect if you love finding patterns in data. Requires Python, SQL, and statistical knowledge. Many free courses available on Google and Coursera.
-
-**3. Cloud & DevOps Engineering**
-High demand role focused on infrastructure automation. AWS and Google Cloud offer free training paths.
-
-**4. AI/ML Engineering**
-The cutting edge of tech! Combines programming with mathematics. Google's ML Crash Course is a great free starting point.
-
-**5. Cybersecurity**
-Critical and growing field. Start with Cisco's free Networking Essentials and work toward security certifications.
-
-💡 **Action Step:** Pick the one that excites you most, then take one free course this week to test your interest!`;
+  if (!resp.ok) {
+    const data = await resp.json().catch(() => ({}));
+    onError(data.error || `Error ${resp.status}`);
+    return;
   }
 
-  if (q.includes('transition') || q.includes('switch') || q.includes('move to') || q.includes('change')) {
-    return `Transitioning careers is absolutely doable, ${userName}! Here's a structured approach:
-
-**Short-term (1-3 months):**
-- Identify transferable skills from your current role
-- Take 1-2 foundational courses in your target area
-- Build a small portfolio project
-
-**Medium-term (3-6 months):**
-- Complete a certification (many are free!)
-- Contribute to open-source projects in the new domain
-- Network with professionals already in the role
-
-**Long-term (6-12 months):**
-- Apply for junior/transition roles
-- Continue building expertise through projects
-- Consider mentorship programs for women in tech
-
-🎯 **Free Resources:**
-- Google Career Certificates (Coursera)
-- freeCodeCamp learning paths
-- HackerRank skill certifications
-
-Would you like me to create a specific action plan for your target role?`;
+  if (!resp.body) {
+    onError("No response body");
+    return;
   }
 
-  if (q.includes('certification') || q.includes('certificate')) {
-    return `Here are top free/affordable certifications by field, ${userName}:
+  const reader = resp.body.getReader();
+  const decoder = new TextDecoder();
+  let textBuffer = "";
+  let streamDone = false;
 
-**Cloud Computing:**
-- ☁️ Google Cloud Digital Leader (free training)
-- ☁️ AWS Cloud Practitioner (free training materials)
+  while (!streamDone) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    textBuffer += decoder.decode(value, { stream: true });
 
-**Data & AI:**
-- 🤖 Google Machine Learning Crash Course (free)
-- 📊 Google Data Analytics Certificate
+    let newlineIndex: number;
+    while ((newlineIndex = textBuffer.indexOf("\n")) !== -1) {
+      let line = textBuffer.slice(0, newlineIndex);
+      textBuffer = textBuffer.slice(newlineIndex + 1);
 
-**Programming:**
-- 💻 HackerRank Python/JS/SQL Certifications (free)
-- 💻 freeCodeCamp Full Stack (free)
+      if (line.endsWith("\r")) line = line.slice(0, -1);
+      if (line.startsWith(":") || line.trim() === "") continue;
+      if (!line.startsWith("data: ")) continue;
 
-**Security:**
-- 🔐 Google Cybersecurity Certificate
-- 🔐 Cisco Networking Essentials (free)
+      const jsonStr = line.slice(6).trim();
+      if (jsonStr === "[DONE]") {
+        streamDone = true;
+        break;
+      }
 
-**UX Design:**
-- 🎨 Google UX Design Certificate
-
-💡 **Pro Tip:** Start with HackerRank certifications — they're quick, free, and recognized by many employers!`;
+      try {
+        const parsed = JSON.parse(jsonStr);
+        const content = parsed.choices?.[0]?.delta?.content as string | undefined;
+        if (content) onDelta(content);
+      } catch {
+        textBuffer = line + "\n" + textBuffer;
+        break;
+      }
+    }
   }
 
-  if (q.includes('action plan') || q.includes('roadmap') || q.includes('plan')) {
-    return `Here's your personalized action plan, ${userName}! 🗺️
-
-**Week 1-2: Foundation**
-- [ ] Choose your target role and research requirements
-- [ ] Sign up for one free course (Google/freeCodeCamp)
-- [ ] Set up your GitHub profile
-
-**Week 3-4: Build Skills**
-- [ ] Complete the first module of your chosen course
-- [ ] Solve 10 problems on HackerRank
-- [ ] Start a mini-project related to your target role
-
-**Month 2: Apply & Network**
-- [ ] Get at least one free certification
-- [ ] Build a portfolio project
-- [ ] Join women-in-tech communities (Women Who Code, AnitaB.org)
-
-**Month 3: Level Up**
-- [ ] Complete your primary course
-- [ ] Contribute to an open-source project
-- [ ] Start applying for roles or internships
-
-**Month 4-6: Specialize**
-- [ ] Take an intermediate course
-- [ ] Build 2-3 substantial projects
-- [ ] Practice system design and interviews
-
-🌟 **Remember:** Progress > Perfection. Every small step counts!`;
+  // Final flush
+  if (textBuffer.trim()) {
+    for (let raw of textBuffer.split("\n")) {
+      if (!raw) continue;
+      if (raw.endsWith("\r")) raw = raw.slice(0, -1);
+      if (raw.startsWith(":") || raw.trim() === "") continue;
+      if (!raw.startsWith("data: ")) continue;
+      const jsonStr = raw.slice(6).trim();
+      if (jsonStr === "[DONE]") continue;
+      try {
+        const parsed = JSON.parse(jsonStr);
+        const content = parsed.choices?.[0]?.delta?.content as string | undefined;
+        if (content) onDelta(content);
+      } catch { /* ignore */ }
+    }
   }
 
-  if (q.includes('trend') || q.includes('2025') || q.includes('demand') || q.includes('hot')) {
-    return `Great question about trends, ${userName}! 🔥 Here are the top tech roles in 2025:
-
-**1. AI/ML Engineer** — Highest demand, competitive salaries
-**2. Cloud Security Engineer** — As cloud adoption grows, so does need for security
-**3. Data Engineer** — Building the pipelines that power AI
-**4. Full Stack Developer** — Always in demand, especially with AI integration skills
-**5. DevOps/Platform Engineer** — Critical for modern software delivery
-
-**Emerging Areas:**
-- 🧬 AI Ethics & Governance
-- 🌐 Edge Computing
-- 🤖 Prompt Engineering & AI Product Management
-
-**Skills to invest in:**
-- Python + SQL (universal foundation)
-- Cloud platforms (AWS/GCP/Azure)
-- AI/ML fundamentals
-- System design & architecture
-
-💡 **Quick Win:** Add AI-related skills to your existing expertise — it makes any profile more competitive!`;
-  }
-
-  if (q.includes('interview') || q.includes('prepare')) {
-    return `Interview prep strategy for you, ${userName}! 💪
-
-**Technical Preparation:**
-- Practice on LeetCode/HackerRank (start with Easy, do 2/day)
-- Study system design (free: System Design Primer on GitHub)
-- Review core CS concepts relevant to your target role
-
-**Behavioral Preparation:**
-- Prepare 5-7 STAR format stories
-- Research the company's tech stack and culture
-- Prepare thoughtful questions about the role
-
-**Mock Interview Resources (Free):**
-- Pramp (free peer mock interviews)
-- interviewing.io (practice with engineers)
-- YouTube channels: TechLead, Clément Mihailescu
-
-**Day-of Tips:**
-- Think aloud during coding problems
-- Ask clarifying questions before solving
-- It's okay to say "Let me think about this"
-
-🌟 **Confidence Tip:** You belong in that interview room. Your unique perspective as a woman in tech is a strength!`;
-  }
-
-  return `Thanks for your question, ${userName}! 💜
-
-That's a great topic. Here's what I'd suggest:
-
-**Key Points:**
-- Start by identifying your current strongest skills and interests
-- Look for roles that combine multiple skills you enjoy
-- Focus on one learning path at a time to avoid overwhelm
-
-**Recommended Next Steps:**
-1. Take the "Discover Myself" quiz to understand your personality type
-2. Use "Reality Check" to identify specific skill gaps
-3. Pick one free certification to start with
-
-**Free Resources:**
-- 🎓 Google Career Certificates
-- 💻 freeCodeCamp.org
-- 🏆 HackerRank skill certifications
-- 📚 Coursera (many free courses available)
-
-Would you like me to dive deeper into any specific area? I can help with:
-- Career path planning
-- Skill development roadmaps
-- Interview preparation
-- Certification recommendations
-
-Just ask! 😊`;
+  onDone();
 }
 
 const CareerMentorPage = ({ onBack, userName }: CareerMentorPageProps) => {
   const [messages, setMessages] = useState<Message[]>([
-    { role: 'assistant', content: `Hi ${userName}! 👋 I'm your AI Career Mentor. I'm here to help you navigate your career journey with personalized guidance.\n\nYou can ask me about:\n- 🎯 Career path suggestions\n- 📚 Learning roadmaps & certifications\n- 💡 Skill development strategies\n- 🔄 Career transition advice\n- 📝 Interview preparation\n\nWhat would you like to explore today?` }
+    { role: 'assistant', content: `Hi ${userName}! 👋 I'm your **AI Career Mentor**. I'm here to help you navigate your career journey with personalized guidance.\n\nYou can ask me about:\n- 🎯 Career path suggestions\n- 📚 Learning roadmaps & certifications\n- 💡 Skill development strategies\n- 🔄 Career transition advice\n- 📝 Interview preparation\n\nWhat would you like to explore today?` }
   ]);
   const [input, setInput] = useState("");
   const [isTyping, setIsTyping] = useState(false);
-  const [expandedPaths, setExpandedPaths] = useState<Set<number>>(new Set());
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -226,18 +124,34 @@ const CareerMentorPage = ({ onBack, userName }: CareerMentorPageProps) => {
   }, [messages]);
 
   const sendMessage = async (text: string) => {
-    if (!text.trim()) return;
+    if (!text.trim() || isTyping) return;
     const userMsg: Message = { role: 'user', content: text.trim() };
-    setMessages(prev => [...prev, userMsg]);
+    const updatedMessages = [...messages, userMsg];
+    setMessages(updatedMessages);
     setInput("");
     setIsTyping(true);
 
-    // Simulate AI thinking delay
-    await new Promise(resolve => setTimeout(resolve, 1000 + Math.random() * 1500));
-    
-    const response = generateMentorResponse(text, userName);
-    setMessages(prev => [...prev, { role: 'assistant', content: response }]);
-    setIsTyping(false);
+    let assistantSoFar = "";
+    const upsertAssistant = (chunk: string) => {
+      assistantSoFar += chunk;
+      setMessages(prev => {
+        const last = prev[prev.length - 1];
+        if (last?.role === "assistant" && prev.length === updatedMessages.length + 1) {
+          return prev.map((m, i) => (i === prev.length - 1 ? { ...m, content: assistantSoFar } : m));
+        }
+        return [...prev, { role: "assistant", content: assistantSoFar }];
+      });
+    };
+
+    await streamChat({
+      messages: updatedMessages,
+      onDelta: upsertAssistant,
+      onDone: () => setIsTyping(false),
+      onError: (err) => {
+        setMessages(prev => [...prev, { role: 'assistant', content: `⚠️ ${err}` }]);
+        setIsTyping(false);
+      },
+    });
   };
 
   const handleSubmit = (e: React.FormEvent) => {
@@ -256,6 +170,7 @@ const CareerMentorPage = ({ onBack, userName }: CareerMentorPageProps) => {
           <div className="flex items-center gap-2">
             <Sparkles className="w-5 h-5 text-primary" />
             <span className="font-semibold font-poppins text-card-foreground">Career Mentor</span>
+            <span className="text-xs px-2 py-0.5 rounded-full bg-accent/20 text-accent font-poppins">AI Powered</span>
           </div>
           <div className="w-5" />
         </div>
@@ -275,23 +190,14 @@ const CareerMentorPage = ({ onBack, userName }: CareerMentorPageProps) => {
                 <div className={`w-8 h-8 rounded-full flex items-center justify-center flex-shrink-0 ${
                   msg.role === 'user' ? 'bg-primary' : 'bg-secondary'
                 }`}>
-                  {msg.role === 'user' 
-                    ? <User className="w-4 h-4 text-primary-foreground" /> 
+                  {msg.role === 'user'
+                    ? <User className="w-4 h-4 text-primary-foreground" />
                     : <Bot className="w-4 h-4 text-secondary-foreground" />
                   }
                 </div>
                 <GlassCard className={`p-4 ${msg.role === 'user' ? 'bg-primary/10' : ''}`}>
-                  <div className="text-sm font-poppins text-card-foreground whitespace-pre-line leading-relaxed">
-                    {msg.content.split('\n').map((line, li) => {
-                      // Simple markdown-like rendering
-                      if (line.startsWith('**') && line.endsWith('**')) {
-                        return <p key={li} className="font-bold mt-2 first:mt-0">{line.replace(/\*\*/g, '')}</p>;
-                      }
-                      if (line.startsWith('- ')) {
-                        return <p key={li} className="ml-3">{line}</p>;
-                      }
-                      return <p key={li} className={line === '' ? 'h-2' : ''}>{line}</p>;
-                    })}
+                  <div className="text-sm font-poppins text-card-foreground prose prose-sm max-w-none prose-headings:text-card-foreground prose-strong:text-card-foreground prose-li:text-card-foreground prose-p:text-card-foreground prose-a:text-primary">
+                    <ReactMarkdown>{msg.content}</ReactMarkdown>
                   </div>
                 </GlassCard>
               </div>
@@ -299,7 +205,7 @@ const CareerMentorPage = ({ onBack, userName }: CareerMentorPageProps) => {
           ))}
         </AnimatePresence>
 
-        {isTyping && (
+        {isTyping && messages[messages.length - 1]?.role !== 'assistant' && (
           <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="flex gap-2">
             <div className="w-8 h-8 rounded-full bg-secondary flex items-center justify-center flex-shrink-0">
               <Bot className="w-4 h-4 text-secondary-foreground" />
