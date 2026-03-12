@@ -1,5 +1,4 @@
 // Simple state management for the app
-import { create } from 'zustand';
 
 export type Proficiency = 'Beginner' | 'Intermediate' | 'Advanced';
 
